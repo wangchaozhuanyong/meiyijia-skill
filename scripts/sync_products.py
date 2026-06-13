@@ -40,6 +40,7 @@ DEFAULT_EXPORT_MIN_DATA_ROWS = 1000
 DEFAULT_IMPORT_MIN_SUCCESS_COUNT = 1000
 DEFAULT_IMPORT_WARNING_REVIEW_THRESHOLD = 20
 XLSX_NS = {"xlsx": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+RUN_ARTIFACTS: set[Path] = set()
 
 EXPORT_REQUIRED_HEADER_GROUPS = (
     ("名称", ("名称", "商品名称")),
@@ -158,6 +159,17 @@ def int_env(name: str, default: int) -> int:
         raise RuntimeError(f"Environment variable {name} must be an integer.") from exc
 
 
+def bool_env(name: str, default: bool) -> bool:
+    raw_value = os.environ.get(name, "").strip().lower()
+    if not raw_value:
+        return default
+    if raw_value in {"1", "true", "yes", "y", "on"}:
+        return True
+    if raw_value in {"0", "false", "no", "n", "off"}:
+        return False
+    raise RuntimeError(f"Environment variable {name} must be true or false.")
+
+
 def load_config() -> Config:
     load_dotenv(ROOT / ".env")
     return Config(
@@ -206,10 +218,47 @@ def lock_mtime_age_seconds(path: Path) -> float:
         return 0
 
 
+def track_artifact(path: Path) -> Path:
+    RUN_ARTIFACTS.add(path.resolve())
+    return path
+
+
+def cleanup_success_artifacts(shutdown_logging: bool = True) -> list[Path]:
+    if shutdown_logging:
+        logging.shutdown()
+    deleted: list[Path] = []
+    cleanup_targets = set(RUN_ARTIFACTS)
+    cleanup_targets.update({LOG_DIR / "launchd.out.log", LOG_DIR / "launchd.err.log"})
+    for path in sorted((item.resolve() for item in cleanup_targets), key=lambda item: str(item)):
+        if not is_safe_runtime_artifact(path):
+            continue
+        try:
+            if path.exists() and path.is_file():
+                path.unlink()
+                deleted.append(path)
+        except OSError:
+            # Cleanup is intentionally best-effort after success. A failure here should not
+            # make the completed import look failed or trigger a repeat import.
+            continue
+    RUN_ARTIFACTS.clear()
+    return deleted
+
+
+def is_safe_runtime_artifact(path: Path) -> bool:
+    root = ROOT.resolve()
+    allowed_dirs = (DOWNLOAD_DIR.resolve(), LOG_DIR.resolve(), SCREENSHOT_DIR.resolve())
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return any(path == directory or directory in path.parents for directory in allowed_dirs)
+
+
 def setup_logging() -> Path:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     now = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d-%H%M%S")
     log_path = LOG_DIR / f"sync-{now}.log"
+    track_artifact(log_path)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
@@ -249,6 +298,7 @@ async def screenshot(page: "Page", label: str) -> None:
     path = SCREENSHOT_DIR / f"{stamp}-{label}.png"
     with contextlib.suppress(Exception):
         await page.screenshot(path=str(path), full_page=True)
+        track_artifact(path)
         logging.info("Saved screenshot: %s", path)
 
 
@@ -331,6 +381,7 @@ async def export_pospal_products(page: "Page") -> Path:
     if target.exists():
         target = DOWNLOAD_DIR / f"{target.stem}-{datetime.now():%H%M%S}{target.suffix}"
     await download.save_as(str(target))
+    track_artifact(target)
     logging.info("Downloaded Pospal export: %s (%s bytes)", target, target.stat().st_size)
     validate_export_file(target)
     return target
@@ -695,6 +746,7 @@ def write_import_result(result: dict) -> Path:
     now = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d-%H%M%S")
     path = LOG_DIR / f"import-result-{now}.json"
     path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    track_artifact(path)
     logging.info("Saved MYJ import result: %s", path)
     return path
 
@@ -747,6 +799,7 @@ def write_import_warnings(result: dict) -> tuple[Path | None, Path | None]:
     json_path = LOG_DIR / f"warnings-{now}.json"
     csv_path = LOG_DIR / f"warnings-{now}.csv"
     json_path.write_text(json.dumps(warnings, ensure_ascii=False, indent=2), encoding="utf-8")
+    track_artifact(json_path)
     with csv_path.open("w", encoding="utf-8-sig", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=["master_code", "reason", "sample"])
         writer.writeheader()
@@ -758,6 +811,7 @@ def write_import_warnings(result: dict) -> tuple[Path | None, Path | None]:
                     "sample": item.get("sample", ""),
                 }
             )
+    track_artifact(csv_path)
     logging.info("Saved MYJ warning files: %s, %s", json_path, csv_path)
     return json_path, csv_path
 
@@ -802,6 +856,7 @@ def write_import_report(
             lines.append(f"{index}. `{master_code}`：{reason}；样例：{sample}")
     path = LOG_DIR / f"daily-report-{stamp}.md"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    track_artifact(path)
     return path
 
 
@@ -824,6 +879,7 @@ def write_failure_report(exc: Exception, log_path: Path) -> Path:
         "3. 如果真实导入状态不明确，先在 MYJ 后台确认导入记录，不要重复执行真实导入。",
     ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    track_artifact(path)
     logging.info("Saved failure report: %s", path)
     return path
 
@@ -882,6 +938,7 @@ def parse_args() -> argparse.Namespace:
 
 async def main() -> int:
     args = parse_args()
+    RUN_ARTIFACTS.clear()
     ensure_dirs()
     log_path = setup_logging()
     logging.info("Log file: %s", log_path)
@@ -896,6 +953,8 @@ async def main() -> int:
             export_file = await run_browser(args, config)
             if args.run:
                 mark_completed(config.timezone, f"imported={export_file}")
+                if bool_env("CLEANUP_SUCCESS_ARTIFACTS", True):
+                    cleanup_success_artifacts()
         return 0
     except Exception as exc:
         logging.exception("Sync failed: %s", exc)

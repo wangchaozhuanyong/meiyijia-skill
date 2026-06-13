@@ -117,5 +117,53 @@ class RunLockTests(unittest.TestCase):
             self.assertFalse(lock_path.exists())
 
 
+class SuccessCleanupTests(unittest.TestCase):
+    def test_cleanup_success_artifacts_deletes_only_tracked_runtime_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            original_root = sync_products.ROOT
+            original_download_dir = sync_products.DOWNLOAD_DIR
+            original_log_dir = sync_products.LOG_DIR
+            original_screenshot_dir = sync_products.SCREENSHOT_DIR
+            original_artifacts = set(sync_products.RUN_ARTIFACTS)
+            root = Path(temp)
+            try:
+                sync_products.ROOT = root
+                sync_products.DOWNLOAD_DIR = root / "downloads"
+                sync_products.LOG_DIR = root / "logs"
+                sync_products.SCREENSHOT_DIR = root / "screenshots"
+                for directory in (sync_products.DOWNLOAD_DIR, sync_products.LOG_DIR, sync_products.SCREENSHOT_DIR):
+                    directory.mkdir()
+
+                download = sync_products.DOWNLOAD_DIR / "products.xlsx"
+                log = sync_products.LOG_DIR / "sync.log"
+                screenshot = sync_products.SCREENSHOT_DIR / "screen.png"
+                state_marker = root / ".schedule-state" / "completed-2026-06-13.txt"
+                state_marker.parent.mkdir()
+                source_file = root / "scripts" / "sync_products.py"
+                source_file.parent.mkdir()
+                for path in (download, log, screenshot, state_marker, source_file):
+                    path.write_text("x", encoding="utf-8")
+
+                sync_products.RUN_ARTIFACTS.clear()
+                for path in (download, log, screenshot, state_marker, source_file):
+                    sync_products.track_artifact(path)
+
+                deleted = sync_products.cleanup_success_artifacts(shutdown_logging=False)
+
+                self.assertEqual(set(deleted), {download.resolve(), log.resolve(), screenshot.resolve()})
+                self.assertFalse(download.exists())
+                self.assertFalse(log.exists())
+                self.assertFalse(screenshot.exists())
+                self.assertTrue(state_marker.exists())
+                self.assertTrue(source_file.exists())
+            finally:
+                sync_products.ROOT = original_root
+                sync_products.DOWNLOAD_DIR = original_download_dir
+                sync_products.LOG_DIR = original_log_dir
+                sync_products.SCREENSHOT_DIR = original_screenshot_dir
+                sync_products.RUN_ARTIFACTS.clear()
+                sync_products.RUN_ARTIFACTS.update(original_artifacts)
+
+
 if __name__ == "__main__":
     unittest.main()

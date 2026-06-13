@@ -20,7 +20,8 @@ Remote repository: `https://github.com/wangchaozhuanyong/meiyijia-skill.git`
 
 - Stronger XLSX/CSV export validation.
 - MYJ import result threshold checks.
-- Warning JSON/CSV and Markdown daily reports.
+- Warning JSON/CSV and Markdown daily reports for failed or unclear runs.
+- Successful real-run artifact cleanup after the Beijing-date completion marker is written.
 - Failure Markdown reports.
 - Stale lock cleanup.
 - Unit tests and `scripts/check_skill.py`.

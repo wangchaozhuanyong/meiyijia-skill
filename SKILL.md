@@ -14,7 +14,7 @@ Use this skill to operate and maintain the Meiyijia product synchronization:
 3. Log in to the MYJ admin product page.
 4. Open product batch import to verify the importer UI is available.
 5. Import the exported file through the MYJ `/api/admin/products/import` endpoint using the logged-in admin token.
-6. Save logs, screenshots, and downloaded artifacts.
+6. Keep troubleshooting artifacts only when the run fails or is unclear. Successful real imports clean up current-run artifacts after the completion marker is written.
 
 Never hard-code usernames, passwords, tokens, or private URLs into code or this skill. Read credentials from `.env` or the process environment.
 
@@ -36,7 +36,8 @@ Never hard-code usernames, passwords, tokens, or private URLs into code or this 
 - Real imports use the MYJ backend API after browser login because the web UI has a short frontend timeout and can falsely show a file-format error while the backend import succeeds.
 - Export files must pass structural validation before import. XLSX/CSV files are checked for row count and required Pospal headers.
 - Real import results must have zero failed rows and a sane success count. High pack/spec warning counts generate review reports instead of silently passing.
-- Each real import writes an import result JSON, warning JSON/CSV when needed, and a Markdown daily report under `logs/`.
+- Successful real imports delete current-run downloads, screenshots, logs, reports, warning files, and launchd stdout/stderr logs after writing the Beijing-date completion marker.
+- Failed or unclear runs keep all current-run artifacts for troubleshooting.
 - A stale scheduler lock is cleared only when the original process is gone or the lock is older than the safety window.
 - Before editing automation selectors, inspect the current site behavior and keep changes minimal.
 - After script changes, run `python scripts/check_skill.py`.
@@ -61,6 +62,7 @@ Optional safety thresholds can be tuned in `.env` after checking normal daily vo
 - `POSPAL_EXPORT_MIN_ROWS`
 - `MYJ_IMPORT_MIN_SUCCESS_COUNT`
 - `MYJ_IMPORT_WARNING_REVIEW_THRESHOLD`
+- `CLEANUP_SUCCESS_ARTIFACTS` defaults to `true`; set to `false` only when you intentionally want to inspect success artifacts.
 
 ## Manual Runs
 
@@ -130,4 +132,4 @@ When a run fails:
 
 Do not retry real imports repeatedly if the first import may have partially succeeded. Inspect MYJ admin import history or product count first.
 
-Review `logs/daily-report-*.md` after scheduled runs. If warning CSV files are produced, process the top repeated pack/spec issues before lowering any threshold.
+After successful real imports, current-run artifacts are intentionally removed. If files remain in `logs/`, `downloads/`, or `screenshots/` after a real run, treat that as a failure or unclear run and inspect them before retrying.

@@ -47,9 +47,10 @@ Install launchd through `scripts/install_runtime_launchd.py`, not `scripts/insta
 - If an old lock file remains after a crash, the script clears it only when the recorded process is gone or the lock is older than the stale-lock window.
 - Export files are rejected before upload when they are too small, malformed, have too few product rows, or are missing required columns such as 名称、分类、条码、进货价、销售价、商品状态.
 - Import results are rejected when MYJ reports failed rows or an unexpectedly low success count.
-- Screenshots are taken around important steps.
+- Screenshots are taken around important steps while the run is active.
 - Logs are timestamped and do not print passwords.
-- Successful real imports write `daily-report-*.md`; high pack/spec warning counts also write `warnings-*.json` and `warnings-*.csv` for review.
+- Successful real imports delete the current run's downloaded export, screenshots, logs, import result JSON, warning JSON/CSV, Markdown report, and launchd stdout/stderr logs after the Beijing-date completion marker is written.
+- Failed or unclear runs keep artifacts for troubleshooting and manual import-state review.
 - Real import posts to `/api/admin/products/import` with a 300-second timeout after browser login. The MYJ web UI can time out after about 15 seconds and show a misleading file-format error even when the backend import succeeds.
 - Do not loop real imports after an unclear failure; check MYJ admin first.
 
@@ -63,9 +64,11 @@ python scripts/check_skill.py
 
 The check script runs Python compilation, unit tests, CLI help, and basic template checks.
 
-## Daily report review
+## Artifact review
 
-After a scheduled run, inspect the newest `logs/daily-report-*.md`.
+After a successful scheduled real import, there should be no current-run artifact files left in `downloads/`, `screenshots/`, or `logs/`.
+
+If artifacts remain after a real import attempt, treat the run as failed or unclear and inspect the newest `logs/daily-report-*.md`.
 
 Treat these as review triggers:
 

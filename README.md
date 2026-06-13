@@ -38,7 +38,8 @@ Real imports require explicit operator approval.
 - Dry-run is the default operational mode.
 - Export files are validated for type, size, row count, and required columns before import.
 - MYJ API import results are checked for failed rows and abnormal success counts.
-- Pack/spec warnings are written to JSON, CSV, and the Markdown daily report.
+- Successful real imports delete the current run's downloads, screenshots, logs, reports, and warning files after the completion marker is written.
+- Failed or unclear runs keep downloads, screenshots, logs, reports, and warning files for troubleshooting.
 - Scheduled runs use Beijing time and write a once-per-date completion marker.
 - Stale lock files are cleared only when the recorded process is gone or the lock is old enough.
 

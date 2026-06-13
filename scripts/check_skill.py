@@ -47,6 +47,7 @@ def main() -> int:
             "POSPAL_EXPORT_MIN_ROWS=",
             "MYJ_IMPORT_MIN_SUCCESS_COUNT=",
             "MYJ_IMPORT_WARNING_REVIEW_THRESHOLD=",
+            "CLEANUP_SUCCESS_ARTIFACTS=",
         ],
     )
     assert_file_contains(
