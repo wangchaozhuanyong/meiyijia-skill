@@ -948,6 +948,8 @@ async def main() -> int:
             allowed, reason = should_run_scheduled(config.timezone, args.beijing_hour)
             if not allowed:
                 logging.info("Scheduled run skipped: %s", reason)
+                if bool_env("CLEANUP_SUCCESS_ARTIFACTS", True):
+                    cleanup_success_artifacts()
                 return 0
         with RunLock(LOCK_PATH):
             export_file = await run_browser(args, config)

@@ -50,6 +50,7 @@ Install launchd through `scripts/install_runtime_launchd.py`, not `scripts/insta
 - Screenshots are taken around important steps while the run is active.
 - Logs are timestamped and do not print passwords.
 - Successful real imports delete the current run's downloaded export, screenshots, logs, import result JSON, warning JSON/CSV, Markdown report, and launchd stdout/stderr logs after the Beijing-date completion marker is written.
+- Successful scheduled skip checks also delete their own logs when cleanup is enabled.
 - Failed or unclear runs keep artifacts for troubleshooting and manual import-state review.
 - Real import posts to `/api/admin/products/import` with a 300-second timeout after browser login. The MYJ web UI can time out after about 15 seconds and show a misleading file-format error even when the backend import succeeds.
 - Do not loop real imports after an unclear failure; check MYJ admin first.
