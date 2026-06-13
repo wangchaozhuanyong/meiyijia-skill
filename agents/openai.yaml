@@ -1,0 +1,6 @@
+interface:
+  display_name: "Meiyijia Product Sync"
+  short_description: "Sync Pospal products into MYJ admin daily"
+  default_prompt: "Use $meiyijia-product-sync to export Pospal products and import them into the MYJ admin product system."
+policy:
+  allow_implicit_invocation: true
