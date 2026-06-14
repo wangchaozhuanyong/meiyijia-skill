@@ -293,6 +293,54 @@ def mark_completed(tz_name: str, details: str) -> None:
     marker.write_text(f"{now.isoformat()}\n{details}\n", encoding="utf-8")
 
 
+def write_success_summary(
+    result: dict,
+    export_file: Path,
+    import_result_path: Path,
+    report_path: Path,
+    warnings_json_path: Path | None,
+    warnings_csv_path: Path | None,
+    tz_name: str = "Asia/Shanghai",
+) -> Path:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    now = beijing_now(tz_name)
+    data = result.get("data") or {}
+    warnings = data.get("packWarnings") or []
+    threshold = int_env("MYJ_IMPORT_WARNING_REVIEW_THRESHOLD", DEFAULT_IMPORT_WARNING_REVIEW_THRESHOLD)
+    review_status = "需要人工复核" if len(warnings) >= threshold else "正常"
+    lines = [
+        "# 美宜佳商品同步最后成功摘要",
+        "",
+        f"- 北京时间：{now:%Y-%m-%d %H:%M:%S}",
+        f"- 状态：成功（{review_status}）",
+        f"- 导出文件：`{export_file.name}`",
+        f"- 新增：{safe_int(data.get('insertCount'))}",
+        f"- 更新：{safe_int(data.get('updateCount'))}",
+        f"- 跳过：{safe_int(data.get('skipCount'))}",
+        f"- 成功：{safe_int(data.get('successCount'))}",
+        f"- 失败：{safe_int(data.get('failCount'))}",
+        f"- 拆包/规格警告：{len(warnings)}",
+        f"- 导入结果文件：`{import_result_path.name}`",
+        f"- 日报文件：`{report_path.name}`",
+    ]
+    if warnings_json_path:
+        lines.append(f"- 警告 JSON：`{warnings_json_path.name}`")
+    if warnings_csv_path:
+        lines.append(f"- 警告 CSV：`{warnings_csv_path.name}`")
+    lines.extend(
+        [
+            "",
+            "说明：成功运行后的下载、截图、详细日志和日报可能会按清理规则删除；此摘要会保留用于确认当天是否成功。",
+        ]
+    )
+    content = "\n".join(lines) + "\n"
+    dated_path = STATE_DIR / f"success-summary-{now:%Y-%m-%d}.md"
+    last_path = STATE_DIR / "last-success-summary.md"
+    dated_path.write_text(content, encoding="utf-8")
+    last_path.write_text(content, encoding="utf-8")
+    return last_path
+
+
 async def screenshot(page: "Page", label: str) -> None:
     stamp = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d-%H%M%S")
     path = SCREENSHOT_DIR / f"{stamp}-{label}.png"
@@ -562,11 +610,12 @@ async def login_myj(page: "Page", config: Config) -> None:
         logging.info("Logging in to MYJ admin")
         await fill_login_form(page, config.myj_username, config.myj_password)
         await click_login_submit(page)
-        await page.wait_for_load_state("networkidle", timeout=30000)
-        await page.wait_for_timeout(2000)
-        await screenshot(page, "myj-after-login")
-        await assert_logged_in(page, "MYJ admin")
-        await wait_for_myj_login_or_app(page, allow_login=False)
+        with contextlib.suppress(Exception):
+            await page.wait_for_load_state("networkidle", timeout=30000)
+        try:
+            await wait_for_myj_login_or_app(page, allow_login=False, timeout_ms=60000)
+        finally:
+            await screenshot(page, "myj-after-login")
 
 
 async def wait_for_myj_login_or_app(page: "Page", allow_login: bool = True, timeout_ms: int = 30000) -> None:
@@ -638,6 +687,14 @@ async def import_to_myj(page: "Page", export_file: Path) -> None:
         warnings_json_path=warnings_json_path,
         warnings_csv_path=warnings_csv_path,
     )
+    summary_path = write_success_summary(
+        result=result,
+        export_file=export_file,
+        import_result_path=import_result_path,
+        report_path=report_path,
+        warnings_json_path=warnings_json_path,
+        warnings_csv_path=warnings_csv_path,
+    )
     logging.info(
         "MYJ API import complete: %s; insert=%s update=%s skip=%s warnings=%s",
         result.get("message"),
@@ -647,6 +704,7 @@ async def import_to_myj(page: "Page", export_file: Path) -> None:
         len(data.get("packWarnings") or []),
     )
     logging.info("Saved daily import report: %s", report_path)
+    logging.info("Saved success summary: %s", summary_path)
 
 
 async def open_myj_products_page(page: "Page") -> None:

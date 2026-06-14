@@ -104,6 +104,53 @@ class ImportAssessmentTests(unittest.TestCase):
             sync_products.assess_import_result(result, min_success_count=10)
 
 
+class SuccessSummaryTests(unittest.TestCase):
+    def test_write_success_summary_keeps_small_state_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            original_state_dir = sync_products.STATE_DIR
+            root = Path(temp)
+            try:
+                sync_products.STATE_DIR = root / ".schedule-state"
+                export_file = root / "downloads" / "products.xlsx"
+                import_result_path = root / "logs" / "import-result.json"
+                report_path = root / "logs" / "daily-report.md"
+                warnings_csv_path = root / "logs" / "warnings.csv"
+                warnings_json_path = root / "logs" / "warnings.json"
+                for path in (export_file, import_result_path, report_path, warnings_csv_path, warnings_json_path):
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("x", encoding="utf-8")
+                result = {
+                    "success": True,
+                    "data": {
+                        "insertCount": 1,
+                        "updateCount": 2,
+                        "skipCount": 3,
+                        "successCount": 6,
+                        "failCount": 0,
+                        "packWarnings": [{"master_code": "1", "reason": "review", "sample": "sample"}],
+                    },
+                }
+
+                last_path = sync_products.write_success_summary(
+                    result=result,
+                    export_file=export_file,
+                    import_result_path=import_result_path,
+                    report_path=report_path,
+                    warnings_json_path=warnings_json_path,
+                    warnings_csv_path=warnings_csv_path,
+                    tz_name="Asia/Shanghai",
+                )
+
+                self.assertEqual(last_path, sync_products.STATE_DIR / "last-success-summary.md")
+                content = last_path.read_text(encoding="utf-8")
+                self.assertIn("状态：成功", content)
+                self.assertIn("成功：6", content)
+                self.assertIn("warnings.csv", content)
+                self.assertEqual(len(list(sync_products.STATE_DIR.glob("success-summary-*.md"))), 1)
+            finally:
+                sync_products.STATE_DIR = original_state_dir
+
+
 class RunLockTests(unittest.TestCase):
     def test_run_lock_clears_stale_dead_process_lock(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
