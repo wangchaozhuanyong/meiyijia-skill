@@ -272,18 +272,23 @@ def ensure_dirs() -> None:
         path.mkdir(parents=True, exist_ok=True)
 
 
-def beijing_now(tz_name: str) -> datetime:
+def zoned_now(tz_name: str) -> datetime:
     return datetime.now(ZoneInfo(tz_name))
 
 
-def should_run_scheduled(tz_name: str, beijing_hour: int) -> tuple[bool, str]:
-    now = beijing_now(tz_name)
-    date_key = now.strftime("%Y-%m-%d")
+def beijing_now(tz_name: str) -> datetime:
+    return zoned_now(tz_name)
+
+
+def should_run_scheduled(tz_name: str, scheduled_hour: int, marker_tz_name: str | None = None) -> tuple[bool, str]:
+    now = zoned_now(tz_name)
+    marker_now = zoned_now(marker_tz_name or tz_name)
+    date_key = marker_now.strftime("%Y-%m-%d")
     marker = STATE_DIR / f"completed-{date_key}.txt"
-    if now.hour != beijing_hour:
-        return False, f"Beijing time is {now:%Y-%m-%d %H:%M:%S}; outside hour {beijing_hour:02d}."
+    if now.hour != scheduled_hour:
+        return False, f"Scheduled time in {tz_name} is {now:%Y-%m-%d %H:%M:%S}; outside hour {scheduled_hour:02d}."
     if marker.exists():
-        return False, f"Already completed for Beijing date {date_key}."
+        return False, f"Already completed for marker date {date_key} in {marker_tz_name or tz_name}."
     return True, date_key
 
 
@@ -987,8 +992,10 @@ def parse_args() -> argparse.Namespace:
     mode.add_argument("--dry-run", action="store_true", help="Export only; do not upload to MYJ.")
     mode.add_argument("--run", action="store_true", help="Export and import into MYJ.")
     mode.add_argument("--check-myj", action="store_true", help="Login to MYJ and open the batch import UI without uploading.")
-    parser.add_argument("--scheduled", action="store_true", help="Run only during the Beijing scheduled hour and once per Beijing date.")
-    parser.add_argument("--beijing-hour", type=int, default=3, help="Scheduled Beijing hour, default 3.")
+    parser.add_argument("--scheduled", action="store_true", help="Run only during the configured scheduled hour and once per scheduled date.")
+    parser.add_argument("--schedule-timezone", help="IANA timezone for the scheduled gate, for example America/Los_Angeles.")
+    parser.add_argument("--schedule-hour", type=int, help="Scheduled hour in --schedule-timezone. Use 12 for noon.")
+    parser.add_argument("--beijing-hour", type=int, default=3, help="Backward-compatible scheduled Beijing hour, default 3.")
     parser.add_argument("--headed", action="store_true", help="Show browser window.")
     parser.add_argument("--slow-mo", type=int, default=0, help="Playwright slow motion in milliseconds.")
     return parser.parse_args()
@@ -1003,7 +1010,9 @@ async def main() -> int:
     try:
         config = load_config()
         if args.scheduled:
-            allowed, reason = should_run_scheduled(config.timezone, args.beijing_hour)
+            schedule_timezone = args.schedule_timezone or config.timezone
+            schedule_hour = args.schedule_hour if args.schedule_hour is not None else args.beijing_hour
+            allowed, reason = should_run_scheduled(schedule_timezone, schedule_hour, config.timezone)
             if not allowed:
                 logging.info("Scheduled run skipped: %s", reason)
                 if bool_env("CLEANUP_SUCCESS_ARTIFACTS", True):

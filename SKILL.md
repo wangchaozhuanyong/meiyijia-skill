@@ -1,6 +1,6 @@
 ---
 name: meiyijia-product-sync
-description: Automate the daily Meiyijia product sync workflow from Pospal beta product management to the MYJ admin product importer. Use when Codex needs to export all products from https://beta9.pospal.cn/Product/Manage, import the downloaded product file into https://admin.myj.info/products, configure the Beijing-time 03:00 schedule, inspect logs/screenshots, or safely dry-run/debug this merchant product synchronization.
+description: Automate the daily Meiyijia product sync workflow from Pospal beta product management to the MYJ admin product importer. Use when Codex needs to export all products from https://beta9.pospal.cn/Product/Manage, import the downloaded product file into https://admin.myj.info/products, configure the operator-computer-time 12:00 schedule, inspect logs/screenshots, or safely dry-run/debug this merchant product synchronization.
 ---
 
 # Meiyijia Product Sync
@@ -15,13 +15,14 @@ Use this skill to operate and maintain the Meiyijia product synchronization:
 4. Open product batch import to verify the importer UI is available.
 5. Import the exported file through the MYJ `/api/admin/products/import` endpoint using the logged-in admin token.
 6. Keep troubleshooting artifacts only when the run fails or is unclear. Successful real imports clean up current-run artifacts after the completion marker is written.
+7. Keep a Codex-visible daily execution record in the left sidebar by running a separate report-only Codex automation after the launchd job. The visible record must summarize the Beijing-date completion marker, success summary, latest failure report if any, and next action. It must not trigger a second import.
 
 Never hard-code usernames, passwords, tokens, or private URLs into code or this skill. Read credentials from `.env` or the process environment.
 
 ## Project Files
 
 - `scripts/sync_products.py`: Playwright automation for dry-run and real import.
-- `scripts/install_launchd.py`: macOS launchd installer for Beijing-time 03:00 scheduling.
+- `scripts/install_launchd.py`: macOS launchd installer for operator-computer-time 12:00 scheduling.
 - `scripts/check_skill.py`: local safety checks for syntax, tests, CLI help, and config templates.
 - `tests/`: unittest coverage for export validation, import result assessment, and stale lock cleanup.
 - `references/operation.md`: operational checklist, troubleshooting, and selector notes.
@@ -38,6 +39,8 @@ Never hard-code usernames, passwords, tokens, or private URLs into code or this 
 - Real import results must have zero failed rows and a sane success count. High pack/spec warning counts generate review reports instead of silently passing.
 - Successful real imports delete current-run downloads, screenshots, logs, reports, warning files, and launchd stdout/stderr logs after writing the Beijing-date completion marker.
 - Failed or unclear runs keep all current-run artifacts for troubleshooting.
+- Every scheduled day must also have a Codex-visible report-only run after the 12:00 PM America/Los_Angeles launchd update window. This is the operator-facing conversation record in the Codex left sidebar, and it must actively notify the user with the execution result instead of only writing local logs.
+- The Codex-visible report automation is read-only: inspect `.schedule-state/`, `logs/`, `downloads/`, and launchd status only. Do not run `--run`, do not upload files, and do not delete artifacts from the report automation.
 - A stale scheduler lock is cleared only when the original process is gone or the lock is older than the safety window.
 - Before editing automation selectors, inspect the current site behavior and keep changes minimal.
 - After script changes, run `python scripts/check_skill.py`.
@@ -101,9 +104,9 @@ Local checks:
 python scripts/check_skill.py
 ```
 
-## Beijing-Time Schedule
+## Operator-Computer-Time Schedule
 
-Install a macOS launchd job that checks every 10 minutes and runs only once per Beijing date during the 03:00-03:59 Asia/Shanghai window:
+Install a macOS launchd job that checks every 10 minutes and runs only once per business marker date after the operator's computer reaches 12:00 PM America/Los_Angeles:
 
 ```bash
 . .venv/bin/activate
@@ -118,7 +121,20 @@ Unload it:
 python scripts/install_runtime_launchd.py --uninstall
 ```
 
-The scheduler uses the script's `--scheduled --beijing-hour 3 --run` gate instead of relying on the Mac local clock. This avoids timezone and daylight-saving-time drift.
+The installer now uses the script's `--scheduled --schedule-timezone America/Los_Angeles --schedule-hour 12 --run` gate. The trigger time is the user's computer time. The completion marker and success summary still use `TIMEZONE` from `.env` (default `Asia/Shanghai`) so the business date remains stable.
+
+## Codex Visible Record
+
+The launchd job is the real executor, but it runs in the macOS background and does not create a Codex chat record by itself. To keep an operator-visible record in the Codex left sidebar, configure a separate Codex automation to run after the local 12:00 PM update window. For the current America/Los_Angeles summer offset, use UTC 19:30, which is 12:30 PM PDT and 03:30 Beijing time the next day.
+
+That Codex automation must be report-only:
+
+- Read `.schedule-state/last-success-summary.md` and the latest `completed-YYYY-MM-DD.txt`.
+- If no success marker exists for the Beijing date, inspect the newest `logs/daily-report-*-failed.md`, newest `sync-*.log`, and launchd status.
+- Report the result in Simplified Chinese with status, counts, warnings, file references, risk, and next action.
+- Always notify the user in the final response after the automatic execution window, whether the result is success, failure, skipped, or unclear.
+- Do not run `python scripts/sync_products.py --run`.
+- Do not repeat a real import if launchd already completed or if the result is unclear.
 
 ## Failure Handling
 

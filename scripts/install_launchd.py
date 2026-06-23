@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 LABEL = "com.meiyijia.product-sync"
 PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
 LOG_DIR = ROOT / "logs"
+SCHEDULE_TIMEZONE = "America/Los_Angeles"
+SCHEDULE_HOUR = 12
 
 
 def venv_python() -> Path:
@@ -47,8 +49,10 @@ def build_plist() -> dict:
             str(venv_python()),
             str(ROOT / "scripts" / "sync_products.py"),
             "--scheduled",
-            "--beijing-hour",
-            "3",
+            "--schedule-timezone",
+            SCHEDULE_TIMEZONE,
+            "--schedule-hour",
+            str(SCHEDULE_HOUR),
             "--run",
         ],
         "WorkingDirectory": str(ROOT),
@@ -76,7 +80,8 @@ def install() -> None:
     run_launchctl(["bootstrap", f"gui/{os.getuid()}", str(PLIST_PATH)])
     run_launchctl(["enable", f"gui/{os.getuid()}/{LABEL}"])
     print(f"Installed launchd job: {PLIST_PATH}")
-    print("It checks every 10 minutes and runs once per Beijing date during 03:00-03:59.")
+    print(f"It checks every 10 minutes and runs once per scheduled date during {SCHEDULE_HOUR:02d}:00-"
+          f"{SCHEDULE_HOUR:02d}:59 in {SCHEDULE_TIMEZONE}.")
 
 
 def uninstall() -> None:

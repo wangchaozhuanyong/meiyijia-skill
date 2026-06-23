@@ -4,8 +4,10 @@ import html
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from zipfile import ZipFile
+from zoneinfo import ZoneInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -162,6 +164,38 @@ class RunLockTests(unittest.TestCase):
                 self.assertIn("pid=", lock_path.read_text(encoding="utf-8"))
 
             self.assertFalse(lock_path.exists())
+
+
+class ScheduleGateTests(unittest.TestCase):
+    def test_should_run_scheduled_uses_configured_timezone_and_hour(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            original_state_dir = sync_products.STATE_DIR
+            original_zoned_now = sync_products.zoned_now
+            try:
+                sync_products.STATE_DIR = Path(temp) / ".schedule-state"
+                def fake_zoned_now(tz_name: str) -> datetime:
+                    if tz_name == "America/Los_Angeles":
+                        return datetime(2026, 6, 23, 12, 5, tzinfo=ZoneInfo(tz_name))
+                    if tz_name == "Asia/Shanghai":
+                        return datetime(2026, 6, 24, 3, 5, tzinfo=ZoneInfo(tz_name))
+                    raise AssertionError(tz_name)
+
+                sync_products.zoned_now = fake_zoned_now
+
+                allowed, reason = sync_products.should_run_scheduled("America/Los_Angeles", 12, "Asia/Shanghai")
+                self.assertTrue(allowed)
+                self.assertEqual(reason, "2026-06-24")
+
+                marker = sync_products.STATE_DIR / "completed-2026-06-24.txt"
+                marker.parent.mkdir(parents=True)
+                marker.write_text("done", encoding="utf-8")
+
+                allowed, reason = sync_products.should_run_scheduled("America/Los_Angeles", 12, "Asia/Shanghai")
+                self.assertFalse(allowed)
+                self.assertIn("Already completed", reason)
+            finally:
+                sync_products.STATE_DIR = original_state_dir
+                sync_products.zoned_now = original_zoned_now
 
 
 class SuccessCleanupTests(unittest.TestCase):

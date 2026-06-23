@@ -32,13 +32,15 @@ python scripts/sync_products.py --dry-run --headed --slow-mo 300
 
 Then inspect `screenshots/` and update the smallest necessary part of `scripts/sync_products.py`.
 
-## Beijing-time scheduling behavior
+## Operator-computer-time scheduling behavior
 
-The launchd job runs every 10 minutes, but the Python script checks `Asia/Shanghai` time. It only executes once per Beijing date when the Beijing hour is `03`.
+The launchd job runs every 10 minutes, but the Python script gates execution by the operator's computer timezone. The default installer passes `--schedule-timezone America/Los_Angeles --schedule-hour 12`, so the real import starts during the user's local 12:00 PM hour.
 
-This avoids a common bug: a Mac in America/Los_Angeles cannot use a fixed local `StartCalendarInterval` and still stay aligned to Beijing 03:00 across daylight saving time changes.
+Completion markers and success summaries still use the business timezone from `.env` (`TIMEZONE`, default `Asia/Shanghai`). This lets the run start by the user's computer time while keeping the product-sync business date stable and avoiding repeated imports inside the same scheduled window.
 
 Install launchd through `scripts/install_runtime_launchd.py`, not `scripts/install_launchd.py` directly from Desktop. The runtime installer copies the skill to `~/.codex/automations/meiyijia-product-sync` first because macOS LaunchAgents may not have Desktop folder permission.
+
+The Codex visible record is separate from launchd. It should run after the local 12:00 PM real-update window and must stay report-only. It must actively notify the user with the execution result in the final response, whether the run succeeded, failed, skipped, or is unclear. For the current America/Los_Angeles summer offset, configure the visible report at UTC 19:30, equal to 12:30 PM PDT and 03:30 Beijing time the next day.
 
 ## Risk controls
 

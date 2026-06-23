@@ -61,6 +61,24 @@ def main() -> int:
             "tmp/",
         ],
     )
+    assert_file_contains(
+        ROOT / "scripts" / "install_launchd.py",
+        [
+            'SCHEDULE_TIMEZONE = "America/Los_Angeles"',
+            "SCHEDULE_HOUR = 12",
+            "--schedule-timezone",
+            "--schedule-hour",
+        ],
+    )
+    assert_file_contains(
+        ROOT / "SKILL.md",
+        [
+            "America/Los_Angeles",
+            "12:00 PM",
+            "UTC 19:30",
+            "actively notify the user",
+        ],
+    )
     print("All checks passed.")
     return 0
 
