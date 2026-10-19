@@ -84,17 +84,13 @@ jobs:
         if: always()
         run: python3 .github/cloud/daily_sync.py report
 
-      - name: Retain report and failure diagnostics
+      - name: Retain sanitized report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: meiyijia-sync-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            .schedule-state/cloud-report.md
-            .schedule-state/last-success-summary.md
-            logs/
-            screenshots/
-            downloads/
+          # This repository is public. Do not publish merchant exports or screenshots.
+          path: .schedule-state/cloud-report.md
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7

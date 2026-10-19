@@ -184,10 +184,15 @@ class Coordinator:
                 })
             context.update(status="running", detail="同步开始。")
             self.write(context)
-            result = self.run(
-                [sys.executable, "scripts/sync_products.py", f"--{context['mode']}"],
-                cwd=self.root, check=False,
-            )
+            # Playwright exception chains can include filled values. Keep raw output
+            # on the ephemeral runner, outside public Actions logs and artifacts.
+            log_directory = self.root / "logs"
+            log_directory.mkdir(parents=True, exist_ok=True)
+            with (log_directory / "cloud-sync-console.log").open("w", encoding="utf-8") as console:
+                result = self.run(
+                    [sys.executable, "scripts/sync_products.py", f"--{context['mode']}"],
+                    cwd=self.root, check=False, stdout=console, stderr=subprocess.STDOUT,
+                )
             if result.returncode:
                 raise RuntimeError(f"同步程序退出码 {result.returncode}。请检查运行日志。")
             if real:

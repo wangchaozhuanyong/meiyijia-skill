@@ -138,6 +138,23 @@ class ScheduleTests(unittest.TestCase):
         self.assertEqual(self.coordinator.execute(), 1)
         self.assertEqual(self.api.saved['status'], 'needs_review')
 
+    def test_raw_child_output_stays_off_public_logs_and_issue(self):
+        def failed_child(command, **kwargs):
+            self.assertEqual(kwargs['stderr'], daily.subprocess.STDOUT)
+            kwargs['stdout'].write('private fixture: ' + self.env['POSPAL_PASSWORD'])
+            return SimpleNamespace(returncode=1)
+        self.coordinator.run = failed_child
+        self.env.update(GITHUB_EVENT_NAME='workflow_dispatch', SYNC_MODE='dry-run')
+        self.assertEqual(self.coordinator.prepare(), 0)
+        public_output = io.StringIO()
+        with contextlib.redirect_stdout(public_output):
+            self.assertEqual(self.coordinator.execute(), 1)
+            self.assertEqual(self.coordinator.report(), 0)
+        private_log = (self.root / 'logs/cloud-sync-console.log').read_text()
+        self.assertIn(self.env['POSPAL_PASSWORD'], private_log)
+        self.assertNotIn(self.env['POSPAL_PASSWORD'], public_output.getvalue())
+        self.assertNotIn(self.env['POSPAL_PASSWORD'], self.api.comments[-1])
+
     def test_failed_durable_start_prevents_import(self):
         self.assertEqual(self.coordinator.prepare(), 0)
         self.api.fail_write = True
