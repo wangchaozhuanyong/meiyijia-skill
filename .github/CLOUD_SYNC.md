@@ -62,6 +62,15 @@ python3 .github/cloud/bind_local_secrets.py --env-file /本机实际路径/.env
 
 ## 当前交付状态
 
-已准备工作流与协调脚本，原有 10 项测试、协调脚本 20 项离线测试、凭据迁移脚本 4 项测试和 actionlint 工作流检查均已通过。代码发布不表示任务已启用：还必须确认 GitHub Actions Secrets、真实站点检查、旧执行器停用状态和启用变量。当前云会话的 GitHub API 请求返回 Forbidden，无法创建在线 Issue或配置 Actions Secrets；云端也没有商户凭据和本机文件执行通道。
+2026-10-19 已在原电脑完成用户授权的迁移与启用：
 
-因此目前不能将这个定时任务视为已启用。
+- 四项现有凭据已通过标准输入绑定至 GitHub Actions Secrets，并核验名称齐全；凭据值未显示。
+- 原有 10 项测试、协调脚本 21 项测试、凭据迁移脚本 4 项测试及本地脚本检查通过。
+- 银豹登录、导出与文件校验通过：[dry-run](https://github.com/wangchaozhuanyong/meiyijia-skill/actions/runs/39199163985)。
+- 美宜佳后台登录与导入入口检查通过：[check-myj](https://github.com/wangchaozhuanyong/meiyijia-skill/actions/runs/39199186753)。两项检查均未上传商品，检查的执行代码为 `5b19463843c5c6d738b144277df438719192861e`。
+- 已核实本机当天无成功标记、无正在运行的同步进程；旧 launchd 执行器已卸载并停用，保留原凭据、历史记录和项目内重建模板。
+- `MEIYIJIA_CLOUD_SYNC_ENABLED=true` 已写入并读回，工作流处于 active，计划为北京时间／吉隆坡时间每天 12:00。
+- [中文报告 Issue](https://github.com/wangchaozhuanyong/meiyijia-skill/issues/1) 已创建，两个检查结果已成功发表评论并提及仓库所有者，Issue 订阅已确认。
+- 已限制公开附件为脱敏日报，原同步子程序的输出不直接进入公开 Actions 日志。
+
+本次启用未执行真实商品导入。首次真实同步结果须以后续定时执行的回执和日报为准；历史商品导入失败及拆包异常未在本次云端配置中修复。真实运行失败或结果不明时，按上述恢复规则暂停后续导入。
