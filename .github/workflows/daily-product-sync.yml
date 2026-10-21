@@ -12,14 +12,18 @@ on:
         default: dry-run
         options: [dry-run, check-myj, run]
       resolve_run_key:
-        description: '仅用于恢复：日报中的待核实执行标识，如 123456:1'
+        description: '仅记录核实并结束本次（不导入）：填待核实执行标识，如 123456:1'
         type: string
         required: false
       previous_result:
         description: '仅在核对 MYJ 导入记录后选择上次结果'
         type: choice
         default: unverified
-        options: [unverified, not-imported, completed]
+        options: [unverified, not-imported, completed, partial, reconciled]
+      reconciliation_evidence_url:
+        description: 'reconciled 专用：本仓库报告 Issue 的零缺口对账证据评论链接'
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -51,6 +55,7 @@ jobs:
       SYNC_MODE: ${{ inputs.mode || 'run' }}
       RESOLVE_RUN_KEY: ${{ inputs.resolve_run_key }}
       PREVIOUS_RESULT: ${{ inputs.previous_result || 'unverified' }}
+      RECONCILIATION_EVIDENCE_URL: ${{ inputs.reconciliation_evidence_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

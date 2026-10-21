@@ -41,6 +41,10 @@ DEFAULT_IMPORT_MIN_SUCCESS_COUNT = 1000
 DEFAULT_IMPORT_WARNING_REVIEW_THRESHOLD = 20
 XLSX_NS = {"xlsx": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 RUN_ARTIFACTS: set[Path] = set()
+if __package__:
+    from .import_diagnostic import BrowserAutomationError, ImportDiagnostic, diagnose_import_receipt, strict_import_counts, pack_warning_total
+else:
+    from import_diagnostic import BrowserAutomationError, ImportDiagnostic, diagnose_import_receipt, strict_import_counts, pack_warning_total
 
 EXPORT_REQUIRED_HEADER_GROUPS = (
     ("名称", ("名称", "商品名称")),
@@ -50,10 +54,6 @@ EXPORT_REQUIRED_HEADER_GROUPS = (
     ("销售价", ("销售价", "零售价")),
     ("商品状态", ("商品状态", "状态")),
 )
-
-
-class BrowserAutomationError(RuntimeError):
-    """Raised when browser automation cannot complete safely."""
 
 
 @dataclass(frozen=True)
@@ -325,6 +325,7 @@ def write_success_summary(
         f"- 成功：{safe_int(data.get('successCount'))}",
         f"- 失败：{safe_int(data.get('failCount'))}",
         f"- 拆包/规格警告：{len(warnings)}",
+        f"- 拆包异常总数：{pack_warning_total(result) if pack_warning_total(result) is not None else '未知'}",
         f"- 导入结果文件：`{import_result_path.name}`",
         f"- 日报文件：`{report_path.name}`",
     ]
@@ -672,7 +673,14 @@ async def assert_logged_in(page: "Page", system_name: str) -> None:
     raise BrowserAutomationError(f"{system_name} login did not complete; password field is still visible.")
 
 
-async def import_to_myj(page: "Page", export_file: Path) -> None:
+async def import_to_myj(page: "Page", export_file: Path, diagnostic: ImportDiagnostic | None = None) -> None:
+    expected_rows = diagnostic.value.get("export_rows") if diagnostic else None
+    if expected_rows is None:
+        expected_rows = inspect_export_file(export_file).data_row_count
+        if diagnostic:
+            diagnostic.update(export_rows=expected_rows)
+    if diagnostic:
+        diagnostic.stage("import_ready")
     await open_myj_products_page(page)
     await click_first(page, ["批量导入", "批量上传", "Import"], timeout=8000)
     await page.locator("input[type='file']").first.wait_for(state="attached", timeout=15000)
@@ -681,10 +689,16 @@ async def import_to_myj(page: "Page", export_file: Path) -> None:
     token = await page.evaluate("() => localStorage.getItem('admin_token')")
     if not token:
         raise BrowserAutomationError("MYJ admin token was not found after login.")
-    result = await asyncio.to_thread(import_to_myj_api, page.url, token, export_file)
+    await asyncio.to_thread(ensure_myj_categories, page.url, token, export_file, diagnostic)
+    result = await asyncio.to_thread(import_to_myj_api, page.url, token, export_file, diagnostic)
+    if diagnostic:
+        diagnostic.stage("import_receipt")
+    diagnose_import_receipt(result, diagnostic)
     import_result_path = write_import_result(result)
     warnings_json_path, warnings_csv_path = write_import_warnings(result)
-    data = assess_import_result(result)
+    if diagnostic:
+        diagnostic.stage("receipt_saved")
+    data = assess_import_result(result, expected_rows=expected_rows)
     report_path = write_import_report(
         result=result,
         export_file=export_file,
@@ -700,6 +714,8 @@ async def import_to_myj(page: "Page", export_file: Path) -> None:
         warnings_json_path=warnings_json_path,
         warnings_csv_path=warnings_csv_path,
     )
+    if diagnostic:
+        diagnostic.stage("summary_saved")
     logging.info(
         "MYJ API import complete: %s; insert=%s update=%s skip=%s warnings=%s",
         result.get("message"),
@@ -768,7 +784,80 @@ async def wait_for_myj_import_result(page: "Page", timeout_ms: int = 180000) -> 
     raise BrowserAutomationError("Timed out waiting for MYJ import result.")
 
 
-def import_to_myj_api(current_url: str, token: str, export_file: Path) -> dict:
+def export_category_names(path: Path) -> set[str]:
+    """Read category labels without rewriting the original import workbook."""
+    if path.suffix.lower() == ".xlsx":
+        with ZipFile(path) as workbook:
+            sheets = sorted(name for name in workbook.namelist() if name.startswith("xl/worksheets/sheet") and name.endswith(".xml"))
+            if not sheets:
+                raise BrowserAutomationError("Export has no worksheet for category preflight.")
+            rows = read_xlsx_rows(ElementTree.fromstring(workbook.read(sheets[0])), read_xlsx_shared_strings(workbook))
+    elif path.suffix.lower() == ".csv":
+        with path.open(encoding="utf-8-sig", newline="") as file:
+            rows = [[cell.strip() for cell in row] for row in csv.reader(file) if any(cell.strip() for cell in row)]
+    else:
+        raise BrowserAutomationError("Unsupported category preflight source format.")
+    if not rows:
+        raise BrowserAutomationError("Category preflight source is empty.")
+    headers = [normalize_header(value) for value in rows[0]]
+    category_index = next((i for i, value in enumerate(headers) if value in {"分类", "商品分类"}), None)
+    status_index = next((i for i, value in enumerate(headers) if value in {"商品状态", "状态"}), None)
+    if category_index is None:
+        raise BrowserAutomationError("Category preflight source has no category column.")
+    names = set()
+    for row in rows[1:]:
+        if status_index is not None and len(row) > status_index and row[status_index] == "停用":
+            continue
+        if len(row) <= category_index or not row[category_index]:
+            raise BrowserAutomationError("Enabled source row has no category.")
+        names.add(row[category_index])
+    return names
+
+
+def ensure_myj_categories(current_url: str, token: str, export_file: Path, diagnostic: ImportDiagnostic | None = None) -> dict[str, int]:
+    """Use the observed ordinary category form API before submitting products."""
+    if diagnostic:
+        diagnostic.stage("category_preflight")
+    parsed = urlparse(current_url)
+    endpoint = f"{parsed.scheme}://{parsed.netloc}/api/admin/categories"
+    def call(payload: dict | None = None) -> dict:
+        req = request.Request(endpoint, method="GET" if payload is None else "POST",
+            data=None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"})
+        with request.urlopen(req, timeout=30) as response:
+            value = json.load(response)
+        if not isinstance(value, dict) or value.get("success") is not True:
+            raise BrowserAutomationError("Category API did not confirm success.")
+        return value
+    def read() -> list[dict]:
+        categories = call().get("data")
+        if not isinstance(categories, list) or any(not isinstance(item, dict) or not isinstance(item.get("name"), str) for item in categories):
+            raise BrowserAutomationError("Category API returned an invalid list.")
+        return categories
+    try:
+        source_names = export_category_names(export_file)
+        categories = read()
+        missing = sorted(source_names - {item["name"] for item in categories})
+        sort_order = max((int(item.get("sort_order") or 0) for item in categories), default=0)
+        for name in missing:
+            sort_order += 10
+            call({"name": name, "name_en": "", "parent_id": 0, "sort_order": str(sort_order)})
+        if missing and not source_names <= {item["name"] for item in read()}:
+            raise BrowserAutomationError("Created categories were not verified by readback.")
+        counts = {"category_checked": len(source_names), "category_created": len(missing)}
+        if diagnostic:
+            diagnostic.update(**counts)
+        logging.info("Category preflight verified: checked=%s created=%s", len(source_names), len(missing))
+        return counts
+    except Exception:
+        if diagnostic:
+            diagnostic.update(error="category_preflight_failed")
+        raise BrowserAutomationError("MYJ category preflight failed before product import.") from None
+
+
+def import_to_myj_api(
+    current_url: str, token: str, export_file: Path, diagnostic: ImportDiagnostic | None = None,
+) -> dict:
     parsed = urlparse(current_url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
     endpoint = f"{origin}/api/admin/products/import"
@@ -794,14 +883,26 @@ def import_to_myj_api(current_url: str, token: str, export_file: Path) -> dict:
         method="POST",
     )
     try:
+        if diagnostic:
+            diagnostic.update(stage="import_request", request_state="started", outcome="unknown")
         with request.urlopen(req, timeout=300) as resp:
+            if diagnostic:
+                diagnostic.update(request_state="response_received", http_status=resp.status)
             body = resp.read().decode("utf-8", "ignore")
     except error.HTTPError as exc:
+        if diagnostic:
+            diagnostic.update(request_state="response_received", http_status=exc.code, error="http_error")
         body = exc.read().decode("utf-8", "ignore")
         raise BrowserAutomationError(f"MYJ API import HTTP {exc.code}: {body[:500]}") from exc
+    except Exception:
+        if diagnostic:
+            diagnostic.update(error="transport_unknown")
+        raise
     try:
         return json.loads(body)
     except json.JSONDecodeError as exc:
+        if diagnostic:
+            diagnostic.update(error="invalid_json")
         raise BrowserAutomationError(f"MYJ API import returned non-JSON response: {body[:500]}") from exc
 
 
@@ -818,10 +919,12 @@ def assess_import_result(
     result: dict,
     min_success_count: int | None = None,
     warning_review_threshold: int | None = None,
+    expected_rows: int | None = None,
 ) -> dict:
-    data = result.get("data") or {}
-    fail_count = safe_int(data.get("failCount"))
-    success_count = safe_int(data.get("successCount"))
+    counts = strict_import_counts(result, expected_rows)
+    data = result["data"]
+    fail_count = counts["failCount"]
+    success_count = counts["successCount"]
     warnings = data.get("packWarnings") or []
     if not result.get("success"):
         raise BrowserAutomationError(f"MYJ API import failed: {result.get('message')}")
@@ -905,6 +1008,7 @@ def write_import_report(
         f"- 成功：{safe_int(data.get('successCount'))}",
         f"- 失败：{safe_int(data.get('failCount'))}",
         f"- 拆包/规格警告：{len(warnings)}",
+        f"- 拆包异常总数：{pack_warning_total(result) if pack_warning_total(result) is not None else '未知'}",
     ]
     if warnings_json_path:
         lines.append(f"- 警告 JSON：`{warnings_json_path}`")
@@ -955,33 +1059,47 @@ async def click_optional(page: "Page", names: list[str], timeout: int = 3000) ->
         return False
 
 
-async def run_browser(args: argparse.Namespace, config: Config) -> Path:
+async def run_browser(args: argparse.Namespace, config: Config, diagnostic: ImportDiagnostic | None = None) -> Path:
     ensure_dirs()
     try:
         from playwright.async_api import Browser, BrowserContext, async_playwright
     except ModuleNotFoundError as exc:
         raise RuntimeError("Missing dependency: run `pip install -r requirements.txt` first.") from exc
 
+    if diagnostic:
+        diagnostic.stage("browser")
     async with async_playwright() as p:
         browser: Browser = await p.chromium.launch(headless=not args.headed, slow_mo=args.slow_mo)
         context: BrowserContext = await browser.new_context(accept_downloads=True, locale="zh-CN")
         page = await context.new_page()
         try:
             if args.check_myj:
+                if diagnostic:
+                    diagnostic.stage("myj_login")
                 await login_myj(page, config)
                 await check_myj_batch_import(page)
                 logging.info("MYJ check complete. No file was uploaded.")
                 return Path()
+            if diagnostic:
+                diagnostic.stage("pospal_login")
             await login_pospal(page, config)
+            if diagnostic:
+                diagnostic.stage("export")
             export_file = await export_pospal_products(page)
+            if diagnostic:
+                diagnostic.update(export_rows=inspect_export_file(export_file).data_row_count)
             if args.dry_run:
                 logging.info("Dry-run complete. MYJ import was not executed.")
                 return export_file
+            if diagnostic:
+                diagnostic.stage("myj_login")
             await login_myj(page, config)
-            await import_to_myj(page, export_file)
+            await import_to_myj(page, export_file, diagnostic)
             logging.info("Real import completed.")
             return export_file
         finally:
+            if diagnostic and diagnostic.value["outcome"] == "succeeded" and sys.exc_info()[0] is None:
+                diagnostic.stage("closing_browser")
             await context.close()
             await browser.close()
 
@@ -998,6 +1116,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--beijing-hour", type=int, default=3, help="Backward-compatible scheduled Beijing hour, default 3.")
     parser.add_argument("--headed", action="store_true", help="Show browser window.")
     parser.add_argument("--slow-mo", type=int, default=0, help="Playwright slow motion in milliseconds.")
+    parser.add_argument("--run-key", help="Cloud execution identifier for safe diagnostics, for example 123456:1.")
     return parser.parse_args()
 
 
@@ -1007,7 +1126,10 @@ async def main() -> int:
     ensure_dirs()
     log_path = setup_logging()
     logging.info("Log file: %s", log_path)
+    diagnostic = ImportDiagnostic(args.run_key, STATE_DIR) if args.run_key else None
     try:
+        if diagnostic:
+            diagnostic.stage("configuration")
         config = load_config()
         if args.scheduled:
             schedule_timezone = args.schedule_timezone or config.timezone
@@ -1019,13 +1141,19 @@ async def main() -> int:
                     cleanup_success_artifacts()
                 return 0
         with RunLock(LOCK_PATH):
-            export_file = await run_browser(args, config)
+            export_file = await run_browser(args, config, diagnostic)
             if args.run:
+                if diagnostic:
+                    diagnostic.stage("completion_marker")
                 mark_completed(config.timezone, f"imported={export_file}")
+                if diagnostic:
+                    diagnostic.stage("completed")
                 if bool_env("CLEANUP_SUCCESS_ARTIFACTS", True):
                     cleanup_success_artifacts()
         return 0
     except Exception as exc:
+        if diagnostic and diagnostic.value["error"] == "none":
+            diagnostic.update(error="stage_failed")
         logging.exception("Sync failed: %s", exc)
         write_failure_report(exc, log_path)
         return 1

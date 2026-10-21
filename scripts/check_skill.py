@@ -30,6 +30,7 @@ def main() -> int:
             "-m",
             "py_compile",
             "scripts/sync_products.py",
+            "scripts/import_diagnostic.py",
             "scripts/install_launchd.py",
             "scripts/install_runtime_launchd.py",
             "scripts/check_skill.py",
