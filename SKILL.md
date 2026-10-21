@@ -7,6 +7,8 @@ description: Automate the daily Meiyijia product sync workflow from Pospal beta 
 
 ## Purpose
 
+Production scheduling currently runs through GitHub Actions at **12:00 Asia/Kuala_Lumpur / Asia/Shanghai**. Follow [.github/CLOUD_SYNC.md](.github/CLOUD_SYNC.md) for the active cloud executor, safe recovery, and Chinese Issue reporting. The local launchd importer is disabled. Keep one real importer: do not reinstall the local schedule while cloud imports are enabled. A Codex cloud task may maintain or inspect this setup; it must not start a second importer. Local completion markers do not establish the result of a GitHub Actions run.
+
 Use this skill to operate and maintain the Meiyijia product synchronization:
 
 1. Log in to Pospal beta product management.
