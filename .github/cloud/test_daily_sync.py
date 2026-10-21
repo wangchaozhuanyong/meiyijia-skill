@@ -109,6 +109,83 @@ class ScheduleTests(unittest.TestCase):
             RECONCILIATION_EVIDENCE_URL=f'https://github.com/{self.env["GITHUB_REPOSITORY"]}/issues/17#issuecomment-42')
         return proof
 
+    def manual_reconciled(self):
+        self.prior(date='2026-10-17')
+        proof = self.reconciliation()
+        self.api.saved.update(
+            status='reconciled', review_result='reconciled',
+            reconciliation=proof, reconciliation_date='2026-10-18',
+            reconciliation_url=self.env['RECONCILIATION_EVIDENCE_URL'],
+        )
+        self.env.update(
+            GITHUB_EVENT_NAME='workflow_dispatch', SYNC_MODE='run',
+            RESOLVE_RUN_KEY='', PREVIOUS_RESULT='unverified', RECONCILIATION_EVIDENCE_URL='',
+            MANUAL_RECONCILED_RUN_KEY='122:1',
+        )
+
+    def test_explicit_manual_reconciled_same_day_runs_once_and_reports_authorization(self):
+        self.manual_reconciled()
+        self.assertEqual(self.coordinator.prepare(), 0)
+        self.assertEqual(self.api.saved['status'], 'reconciled')
+        self.assertEqual(self.coordinator.execute(), 0)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.api.saved['status'], 'succeeded')
+        self.assertEqual(self.report(), 0)
+        self.assertIn('关联原执行 122:1', self.api.comments[-1])
+        self.assertEqual(self.coordinator.prepare(), 1)
+        self.assertEqual(self.api.saved['status'], 'succeeded')
+        self.assertEqual(len(self.calls), 1)
+
+    def test_manual_reconciled_requires_exact_current_proof_and_manual_run(self):
+        cases = ('wrong_key', 'wrong_event', 'wrong_mode', 'older_date', 'missing_proof',
+                 'wrong_proof_key', 'already_succeeded', 'needs_review', 'running')
+        for case in cases:
+            with self.subTest(case=case):
+                self.manual_reconciled()
+                if case == 'wrong_key': self.env['MANUAL_RECONCILED_RUN_KEY'] = '121:1'
+                if case == 'wrong_event': self.env['GITHUB_EVENT_NAME'] = 'schedule'
+                if case == 'wrong_mode': self.env['SYNC_MODE'] = 'dry-run'
+                if case == 'older_date': self.api.saved['reconciliation_date'] = '2026-10-17'
+                if case == 'missing_proof': self.api.saved.pop('reconciliation')
+                if case == 'wrong_proof_key': self.api.saved['reconciliation']['run_key'] = '121:1'
+                if case == 'already_succeeded': self.api.saved['status'] = 'succeeded'
+                if case in ('needs_review', 'running'): self.api.saved['status'] = case
+                before = copy.deepcopy(self.api.saved)
+                self.assertEqual(self.coordinator.prepare(), 1)
+                self.assertEqual(self.api.saved, before)
+                self.assertEqual(self.calls, [])
+
+    def test_manual_reconciled_rechecks_state_before_submitting(self):
+        for status in ('succeeded', 'running', 'needs_review'):
+            with self.subTest(status=status):
+                self.manual_reconciled()
+                self.assertEqual(self.coordinator.prepare(), 0)
+                self.api.saved['status'] = status
+                before = copy.deepcopy(self.api.saved)
+                self.assertEqual(self.coordinator.execute(), 1)
+                self.assertEqual(self.api.saved, before)
+                self.assertEqual(self.calls, [])
+
+    def test_failed_manual_reconciled_import_stays_paused(self):
+        self.manual_reconciled()
+        def failed(command, **kwargs):
+            self.calls.append(command)
+            return SimpleNamespace(returncode=1)
+        self.coordinator.run = failed
+        self.assertEqual(self.coordinator.prepare(), 0)
+        self.assertEqual(self.coordinator.execute(), 1)
+        self.assertEqual(self.api.saved['status'], 'needs_review')
+        self.assertEqual(self.coordinator.prepare(), 1)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_manual_reconciled_cannot_enable_disabled_sync(self):
+        self.manual_reconciled()
+        self.env['MEIYIJIA_CLOUD_SYNC_ENABLED'] = 'false'
+        self.assertEqual(self.coordinator.prepare(), 0)
+        self.assertEqual(self.coordinator.read()['status'], 'disabled')
+        self.assertEqual(self.api.saved['status'], 'reconciled')
+        self.assertEqual(self.calls, [])
+
     def test_reconciled_coverage_preserves_original_identity_and_never_imports_same_day(self):
         self.prior(date='2026-10-17')
         self.reconciliation()

@@ -247,6 +247,22 @@ class Coordinator:
             with open(path, "a", encoding="utf-8") as file:
                 file.write(f"should_run={'true' if value else 'false'}\n")
 
+    def manual_reconciled_today(self, state, context):
+        key = self.environ.get("MANUAL_RECONCILED_RUN_KEY", "")
+        if not key:
+            return False
+        if (
+            self.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
+            or context["mode"] != "run"
+            or not re.fullmatch(r"\d+:\d+", key)
+            or state["status"] != "reconciled"
+            or state.get("run_key") != key
+            or state.get("reconciliation_date") != context["business_date"]
+        ):
+            raise SafeError("补齐当日手动同步必须明确绑定当前已核实的原执行标识；不能重复执行或重试待核实导入。")
+        validated_reconciliation_record(state.get("reconciliation"), key)
+        return True
+
     def prepare(self):
         env = self.environ
         mode = "run" if env.get("GITHUB_EVENT_NAME") == "schedule" else env.get("SYNC_MODE", "dry-run")
@@ -262,6 +278,8 @@ class Coordinator:
         try:
             if mode not in {"run", "dry-run", "check-myj"}:
                 raise SafeError("无效的同步模式。")
+            if mode != "run" and env.get("MANUAL_RECONCILED_RUN_KEY"):
+                raise SafeError("补齐当日手动同步参数只能用于明确授权的 run 模式。")
             if mode == "run" and env.get("MEIYIJIA_CLOUD_SYNC_ENABLED") != "true":
                 context.update(status="disabled", detail="云端同步尚未启用。请先接入凭据并停用本机 launchd。")
                 self.write(context)
@@ -271,6 +289,7 @@ class Coordinator:
             self.write(context)
             state = self.api.state(context["issue"])
             if mode == "run":
+                manual = self.manual_reconciled_today(state, context)
                 key = env.get("RESOLVE_RUN_KEY", "")
                 result = env.get("PREVIOUS_RESULT", "unverified")
                 if state["status"] in {"running", "needs_review"}:
@@ -303,10 +322,12 @@ class Coordinator:
                     return 0
                 if key or result != "unverified" or env.get("RECONCILIATION_EVIDENCE_URL"):
                     raise SafeError("当前没有与核实参数匹配的待核实运行；本次不会导入。")
-                if completed_today(state, context["business_date"]):
+                if completed_today(state, context["business_date"]) and not manual:
                     context.update(status="skipped", detail="当天已成功同步或完成补齐核实，跳过重复执行。")
                     self.write(context)
                     return 0
+                if manual:
+                    context["manual_reconciled_run_key"] = state["run_key"]
             missing = [name for name in REQUIRED if not env.get(name, "").strip() or env[name].startswith("your-")]
             if missing:
                 raise SafeError("缺少凭据：" + "、".join(missing))
@@ -327,7 +348,10 @@ class Coordinator:
         try:
             if real:
                 state = self.api.state(context["issue"])
-                if state["status"] in {"running", "needs_review"} or completed_today(state, context["business_date"]):
+                manual = self.manual_reconciled_today(state, context)
+                if state["status"] in {"running", "needs_review"} or (
+                    completed_today(state, context["business_date"]) and not manual
+                ):
                     raise SafeError("执行前同步状态已变化，已阻止重复导入。")
                 self.api.save_state(context["issue"], {
                     "status": "running", "business_date": context["business_date"],
@@ -400,6 +424,8 @@ class Coordinator:
             f"- 说明：{context.get('detail', '')}",
             f"- 执行标识：{context.get('run_key', '未开始')}",
         ]
+        if re.fullmatch(r"\d+:\d+", context.get("manual_reconciled_run_key", "")):
+            lines.append(f"- 执行授权：补齐核实当天明确要求手动同步一次；关联原执行 {context['manual_reconciled_run_key']}。")
         lines.extend(context.get("counts", []))
         diagnostic = safe_diagnostic(context.get("diagnostic"), context.get("run_key"))
         if diagnostic:

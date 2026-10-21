@@ -24,6 +24,10 @@ on:
         description: 'reconciled 专用：本仓库报告 Issue 的零缺口对账证据评论链接'
         type: string
         required: false
+      manual_reconciled_run_key:
+        description: '仅在用户明确要求补齐当日再同步一次时，填写已核实的原执行标识'
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -56,6 +60,7 @@ jobs:
       RESOLVE_RUN_KEY: ${{ inputs.resolve_run_key }}
       PREVIOUS_RESULT: ${{ inputs.previous_result || 'unverified' }}
       RECONCILIATION_EVIDENCE_URL: ${{ inputs.reconciliation_evidence_url }}
+      MANUAL_RECONCILED_RUN_KEY: ${{ inputs.manual_reconciled_run_key }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

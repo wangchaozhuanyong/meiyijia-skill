@@ -48,6 +48,8 @@ python3 .github/cloud/bind_local_secrets.py --env-file /本机实际路径/.env
 
 ## 重复导入与异常恢复
 
+若用户在完成 `reconciled` 核实当天明确要求再进行一次真实同步，可手动选择 `mode=run`，只填写 `manual_reconciled_run_key` 为当前已核实的原执行标识；其余恢复参数保持为空／`unverified`。这个入口仅适用于同日、精确标识匹配且证据完整的 `reconciled` 状态，不适用于定时触发、已成功同步或结果待核实的状态。执行前再次核对状态，随后沿用正常的 `running`、回执校验与失败暂停流程；同一标识在开始导入后不能再次使用。默认的同日跳过规则保持有效，日报会记录这次明确手动执行的关联标识。
+
 所有自动与手动运行共用一个 concurrency group，不会相互取消正在执行的任务。完成状态持久化在报告 Issue 的隐藏 JSON 中，不依赖临时 runner、会被驱逐的缓存或云环境后台进程。
 
 真实执行前先把状态保存为 `running`。同一北京时间日期已经成功时，后续运行会跳过。程序失败、执行中断或结果无法完整确认时，后续自动导入会暂停，并继续报告阻塞。依赖安装失败发生在导入开始之前，不会被当成部分导入。
@@ -63,7 +65,7 @@ python3 .github/cloud/bind_local_secrets.py --env-file /本机实际路径/.env
 
 本地修复版本中的核实操作只记录状态并结束本次运行，**不会在同次运行发起商品导入**；下一次定时执行才根据最终状态决定是否允许同步。旧云端版本尚无此保护：核实旧日期执行后可能立即导入今天整批，发布修复之前不要使用旧恢复入口。
 
-`reconciled` 保留原执行日期、标识和已有诊断，不将原执行改称全部成功；补齐核实当天也跳过商品导入，后续日期才允许正常同步。该入口不会自动补录、重试或忽略未闭合的对账记录。证据字段为：`version=1`、`run_key`、`verified_date`、`source_sha256`、`readback_sha256`、`source_rows`、`target_rows`、`target_before`、`added_rows`、`failed_rows=0`、`source_missing=0`、`removed_rows=0`、`stock_precision_rows`、`cost_precision_rows`。JSON 放在评论的 `<!-- meiyijia-reconciliation: … -->` 标记中。工作流输入会设置 `RECONCILIATION_EVIDENCE_URL`；本机 `.env` 不需要填写。
+`reconciled` 保留原执行日期、标识和已有诊断，不将原执行改称全部成功；默认在补齐核实当天跳过商品导入，后续日期才允许正常同步。同日有新的明确同步授权时，使用本节开头的单次手动入口。恢复核实入口不会自动补录、重试或忽略未闭合的对账记录。证据字段为：`version=1`、`run_key`、`verified_date`、`source_sha256`、`readback_sha256`、`source_rows`、`target_rows`、`target_before`、`added_rows`、`failed_rows=0`、`source_missing=0`、`removed_rows=0`、`stock_precision_rows`、`cost_precision_rows`。JSON 放在评论的 `<!-- meiyijia-reconciliation: … -->` 标记中。工作流输入会设置 `RECONCILIATION_EVIDENCE_URL`；本机 `.env` 不需要填写。
 
 源脚本会在请求开始前、收到回执后以及收尾阶段原子保存白名单诊断。请求开始后无可靠回执一律视为未知，不自动重试；部分成功继续暂停。回执要求五项汇总计数均为非负整数，并区分“跳过计入成功／跳过单列”两种闭合口径，校验新增＋更新＋跳过＋失败等于源行数。拆包警告返回明细数量与后台异常总数分别表达，未提供的总数保持未知。
 
